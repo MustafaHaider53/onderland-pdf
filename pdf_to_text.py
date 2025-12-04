@@ -116,9 +116,11 @@ def extract_card_numbers_from_text(text: str) -> list:
             # Look for card number format
             if any(char.isdigit() for char in line) and '-' in line:
                 card = line.split()[0]
-                # Optionally, verify format 0000-0000-0000-0000
+                # Remove hyphens and leading zeros, keep only the numbers
+                clean_card = card.replace('-', '').lstrip('0')
+                # Optionally, verify format 0000-0000-0000-0000 (check original length)
                 if len(card.replace('-', '')) >= 8:  # Minimum for truncated cards
-                    result.append(card)
+                    result.append(clean_card)
     return result
 
 # Example usage (as importable function):
