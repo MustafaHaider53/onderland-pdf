@@ -1,6 +1,8 @@
 import os
 import fitz  # PyMuPDF
 from typing import Union
+import argparse
+import time
 
 from pathlib import Path
 
@@ -14,6 +16,13 @@ try:
 except ImportError:
     pytesseract = None
     Image = None
+
+try:
+    from watchdog.observers import Observer
+    from watchdog.events import FileSystemEventHandler
+except ImportError:
+    Observer = None
+    FileSystemEventHandler = None
 
 def pdf_to_text(
     input_path: Union[str, Path],
@@ -123,6 +132,133 @@ def extract_card_numbers_from_text(text: str) -> list:
                     result.append(clean_card)
     return result
 
+
+class PDFEventHandler(FileSystemEventHandler):
+    """Handles file system events for PDF files."""
+
+    def __init__(self, pdf_dir: Union[str, Path], output_dir: Union[str, Path] = "output_txt"):
+        self.pdf_dir = Path(pdf_dir)
+        self.output_dir = Path(output_dir)
+        # Track processed files to avoid reprocessing
+        self.processed_files = set()
+
+        # Initialize with existing files
+        for pdf_file in self.pdf_dir.glob("*.pdf"):
+            self.processed_files.add(pdf_file.name)
+
+    def on_created(self, event):
+        """Called when a new file is created in the watched directory."""
+        if not event.is_directory and event.src_path.endswith('.pdf'):
+            pdf_path = Path(event.src_path)
+            print(f"[WATCH] New PDF detected: {pdf_path.name}")
+
+            # Small delay to ensure file is fully written
+            time.sleep(1)
+
+            try:
+                pdf_to_text(pdf_path, self.output_dir)
+                self.processed_files.add(pdf_path.name)
+                print(f"[WATCH] Successfully processed: {pdf_path.name}")
+            except Exception as e:
+                print(f"[WATCH] Error processing {pdf_path.name}: {e}")
+
+    def on_modified(self, event):
+        """Called when a file is modified."""
+        if not event.is_directory and event.src_path.endswith('.pdf'):
+            pdf_path = Path(event.src_path)
+            # Only process if we haven't processed this file before
+            if pdf_path.name not in self.processed_files:
+                print(f"[WATCH] Modified PDF detected: {pdf_path.name}")
+                self.on_created(event)
+
+
+def watch_directory(pdf_dir: Union[str, Path], output_dir: Union[str, Path] = "output_txt"):
+    """
+    Watch a directory for new PDF files and automatically process them.
+
+    Args:
+        pdf_dir (str|Path): Directory to watch for PDF files.
+        output_dir (str|Path): Directory to save .txt files.
+    """
+    if not Observer or not FileSystemEventHandler:
+        print("[ERROR] watchdog library not available. Install with: pip install watchdog")
+        return
+
+    pdf_dir = Path(pdf_dir)
+    output_dir = Path(output_dir)
+
+    if not pdf_dir.exists():
+        print(f"[ERROR] PDF directory does not exist: {pdf_dir}")
+        return
+
+    # Create output directory if it doesn't exist
+    output_dir.mkdir(exist_ok=True, parents=True)
+
+    event_handler = PDFEventHandler(pdf_dir, output_dir)
+    observer = Observer()
+    observer.schedule(event_handler, str(pdf_dir), recursive=False)
+
+    print(f"[WATCH] Starting to watch directory: {pdf_dir}")
+    print("[WATCH] Press Ctrl+C to stop watching")
+
+    try:
+        observer.start()
+        # Process any existing PDFs first
+        print("[WATCH] Processing existing PDFs...")
+        pdf_to_text(pdf_dir, output_dir)
+        print("[WATCH] Watching for new PDFs...")
+
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("[WATCH] Stopping watcher...")
+        observer.stop()
+    except Exception as e:
+        print(f"[WATCH] Error: {e}")
+        observer.stop()
+
+    observer.join()
+
+
+def main():
+    """Main function with command line argument parsing."""
+    parser = argparse.ArgumentParser(description="Extract card numbers from PDF files")
+    parser.add_argument(
+        "input_path",
+        nargs="?",
+        default="pdfs",
+        help="Path to PDF file or directory containing PDFs (default: pdfs)"
+    )
+    parser.add_argument(
+        "-o", "--output",
+        default="output_txt",
+        help="Output directory for text files (default: output_txt)"
+    )
+    parser.add_argument(
+        "-w", "--watch",
+        action="store_true",
+        help="Watch the input directory for new PDF files and process them automatically"
+    )
+
+    args = parser.parse_args()
+
+    input_path = Path(args.input_path)
+    output_dir = Path(args.output)
+
+    if args.watch:
+        # Watch mode
+        if input_path.is_file():
+            print("[ERROR] Watch mode requires a directory, not a single file")
+            return
+        watch_directory(input_path, output_dir)
+    else:
+        # Manual processing mode
+        pdf_to_text(input_path, output_dir)
+
+
+if __name__ == "__main__":
+    main()
+
 # Example usage (as importable function):
-from pdf_to_text import pdf_to_text
-pdf_to_text("/Users/mustafahaider/pdf_onderland/pdfs")
+# from pdf_to_text import pdf_to_text
+# pdf_to_text("/Users/mustafahaider/pdf_onderland/pdfs")
